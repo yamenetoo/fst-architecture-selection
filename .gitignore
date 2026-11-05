@@ -4,3 +4,5 @@ __pycache__/
 experiments/oracle.npz
 experiments/results.json
 experiments/table_*.tex
+experiments/grid.json
+experiments/results.png

@@ -13,7 +13,7 @@ import sys
 import numpy as np
 from scipy import stats
 from rfnet import draw_data, seed_weights, Fitted, pruned
-from oracle import S_SEED, N_TRAIN, WIDTHS, DEPTHS, FRACS
+from oracle import S_SEED, N_TRAIN, WIDTHS, DEPTHS, FRACS, FRACS2, PRUNE2_W
 
 R = 10            # seeds per comparison
 N1 = 250          # size of V1a and of V1b
@@ -64,7 +64,7 @@ def reject(method, La, Lb, c, alpha):
 
 
 # ---------------------------------------------------------------- one replication
-def replicate(b, xtr, ytr, mu, mu_pr, gamma, delta):
+def replicate(b, xtr, ytr, mu, mu_pr, mu_pr2, gamma, delta):
     rng = np.random.default_rng(10 ** 8 + b)
     v1a, v1b, v2 = draw_data(N1, rng), draw_data(N1, rng), draw_data(N2, rng)
     seeds1 = rng.integers(0, 2 ** 31, R)
@@ -90,6 +90,14 @@ def replicate(b, xtr, ytr, mu, mu_pr, gamma, delta):
                                 losses(WIDTHS[i + 1], 1, 1, v1a), -gamma, ALPHA / 2))
                     for i in range(nW - 1)]
     out["calib"] = calib
+
+    # exact size: test H0: theta >= theta_true for every consecutive width pair,
+    # so each null sits exactly on its boundary; nominal rejection rate = ALPHA
+    out["boundary"] = {m: [bool(reject(m, losses(WIDTHS[i], 1, 1, v1a),
+                                       losses(WIDTHS[i + 1], 1, 1, v1a),
+                                       mu[i + 1, 0] - mu[i, 0], ALPHA))
+                           for i in range(nW - 1)]
+                       for m in ["crossed", "seed_only", "single", "welch"]}
 
     # building: width chain at depth 1 (alpha/2, V1a), then depth chain (alpha/2, V1b)
     def build(method, safety):
@@ -134,20 +142,27 @@ def replicate(b, xtr, ytr, mu, mu_pr, gamma, delta):
     v1 = (np.vstack([v1a[0], v1b[0]]), np.concatenate([v1a[1], v1b[1]]))
     L = {fr: np.stack([m.loss(*v1) for m in pr[fr]]) for fr in FRACS}
 
-    def prune(kind):
+    def prune(kind, fracs, Lc, mp):
         k = 0
         false_rej = False
-        while k + 1 < len(FRACS):
+        while k + 1 < len(fracs):
             ref = 0 if kind == "cumulative" else k
-            if not reject("crossed", L[FRACS[ref]], L[FRACS[k + 1]], delta, ALPHA):
+            if not reject("crossed", Lc[fracs[ref]], Lc[fracs[k + 1]], delta, ALPHA):
                 break
-            if mu_pr[k + 1] - mu_pr[ref] >= delta:
+            if mp[k + 1] - mp[ref] >= delta:
                 false_rej = True
             k += 1
-        return dict(frac=FRACS[k], harm=float(mu_pr[k] - mu_pr[0]),
-                    harm_exceeds=bool(mu_pr[k] - mu_pr[0] >= delta), fwer=false_rej)
+        return dict(frac=fracs[k], harm=float(mp[k] - mp[0]),
+                    harm_exceeds=bool(mp[k] - mp[0] >= delta), fwer=false_rej)
 
-    out["prune"] = {k: prune(k) for k in ["cumulative", "stepwise"]}
+    out["prune"] = {k: prune(k, FRACS, L, mu_pr) for k in ["cumulative", "stepwise"]}
+
+    # scenario B: prune a width-64 network in 5% steps
+    full2 = [Fitted(xtr, ytr, PRUNE2_W, 1, wt) for wt in w1]
+    L2 = {0.0: np.stack([m.loss(*v1) for m in full2])}
+    for fr in FRACS2[1:]:
+        L2[fr] = np.stack([pruned(xtr, ytr, f, fr).loss(*v1) for f in full2])
+    out["prune2"] = {k: prune(k, FRACS2, L2, mu_pr2) for k in ["cumulative", "stepwise"]}
     return out
 
 
@@ -157,6 +172,7 @@ def main(B=1000, gamma=0.005, delta=0.01):
     orc = np.load("oracle.npz")
     mu = orc["risk"].mean(0)          # widths x depths
     mu_pr = orc["prune"].mean(0)      # fractions
+    mu_pr2 = orc["prune2"].mean(0)    # fractions, scenario B
     xtr, ytr = draw_data(N_TRAIN, np.random.default_rng(S_SEED))
 
     print("Truth of width-chain nulls (depth 1): H0 true if mu(w+) - mu(w) >= -gamma")
@@ -167,13 +183,17 @@ def main(B=1000, gamma=0.005, delta=0.01):
     for k, fr in enumerate(FRACS[1:], 1):
         print(f"  {fr:.1f}: harm={mu_pr[k]-mu_pr[0]:+.4f}  H0 {'TRUE' if mu_pr[k]-mu_pr[0] >= delta else 'false'}")
 
-    res = [replicate(b, xtr, ytr, mu, mu_pr, gamma, delta) for b in range(B)]
+    print(f"Scenario B (width {PRUNE2_W}): cumulative H0 true if total >= delta; stepwise H0 true if step >= delta")
+    for k, fr in enumerate(FRACS2[1:], 1):
+        print(f"  {fr:.2f}: total={mu_pr2[k]-mu_pr2[0]:+.4f}  step={mu_pr2[k]-mu_pr2[k-1]:+.4f}")
+
+    res = [replicate(b, xtr, ytr, mu, mu_pr, mu_pr2, gamma, delta) for b in range(B)]
     print(f"done: {B} replications")
 
     def mc(p):  # Monte Carlo standard error of a proportion
         return np.sqrt(p * (1 - p) / B)
 
-    summ = {"B": B, "gamma": gamma, "delta": delta, "build": {}, "calib": {}, "prune": {}}
+    summ = {"B": B, "gamma": gamma, "delta": delta, "build": {}, "calib": {}}
     for m in res[0]["build"]:
         r = [x["build"][m] for x in res]
         f = np.mean([x["fwer"] for x in r])
@@ -189,10 +209,17 @@ def main(B=1000, gamma=0.005, delta=0.01):
         summ["calib_pair"] = f"{WIDTHS[ib]}->{WIDTHS[ib+1]}"
         for m in res[0]["calib"]:
             summ["calib"][m] = float(np.mean([x["calib"][m][ib] for x in res]))
-    for k in res[0]["prune"]:
-        r = [x["prune"][k] for x in res]
-        p = np.mean([x["harm_exceeds"] for x in r])
-        summ["prune"][k] = dict(harm_exceeds=p, harm_exceeds_se=mc(p),
+    summ["boundary"] = {}
+    for m in res[0]["boundary"]:
+        rates = np.mean([x["boundary"][m] for x in res], axis=0)   # per pair
+        summ["boundary"][m] = dict(mean=float(rates.mean()), max=float(rates.max()),
+                                   per_pair=[float(v) for v in rates])
+    for key in ["prune", "prune2"]:
+        summ[key] = {}
+        for k in res[0][key]:
+            r = [x[key][k] for x in res]
+            p = np.mean([x["harm_exceeds"] for x in r])
+            summ[key][k] = dict(harm_exceeds=p, harm_exceeds_se=mc(p),
                                 frac=np.mean([x["frac"] for x in r]),
                                 harm=np.mean([x["harm"] for x in r]),
                                 fwer=np.mean([x["fwer"] for x in r]))
@@ -207,15 +234,16 @@ def main(B=1000, gamma=0.005, delta=0.01):
     with open("table_building.tex", "w") as fh:
         for m in ["crossed", "crossed+safety", "seed_only", "single", "welch"]:
             s = summ["build"][m]
-            cal = summ["calib"].get(m.replace("+safety", ""), float("nan"))
-            cal_s = "--" if m == "crossed+safety" else f"{cal:.3f}"
+            bd = summ["boundary"].get(m)
+            cal_s = "--" if bd is None else f"{bd['mean']:.3f} / {bd['max']:.3f}"
             fh.write(f"{names[m]} & {s['fwer']:.3f} ({s['fwer_se']:.3f}) & {cal_s} & "
                      f"{s['width']:.1f} & {s['depth']:.2f} & {s['excess']:.4f} ({s['excess_sd']:.4f}) \\\\\n")
     with open("table_pruning.tex", "w") as fh:
-        for k, nm in [("cumulative", "Cumulative margin (proposed)"), ("stepwise", "Stepwise margin")]:
-            s = summ["prune"][k]
-            fh.write(f"{nm} & {s['harm_exceeds']:.3f} ({s['harm_exceeds_se']:.3f}) & "
-                     f"{s['frac']:.3f} & {s['harm']:.4f} \\\\\n")
+        for key, sc in [("prune", "A (width 256)"), ("prune2", f"B (width {PRUNE2_W})")]:
+            for k, nm in [("cumulative", "Cumulative margin (proposed)"), ("stepwise", "Stepwise margin")]:
+                s = summ[key][k]
+                fh.write(f"{sc} & {nm} & {s['harm_exceeds']:.3f} ({s['harm_exceeds_se']:.3f}) & "
+                         f"{s['frac']:.3f} & {s['harm']:.4f} \\\\\n")
 
 
 if __name__ == "__main__":

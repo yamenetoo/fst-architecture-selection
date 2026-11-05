@@ -56,7 +56,8 @@ with Satterthwaite degrees of freedom. The usual *seed-only* and *single-seed* s
 experiments/
   rfnet.py    random-feature ReLU networks (nested across widths), ridge output layer, pruning
   oracle.py   Monte Carlo "true" risks mu(a) for every architecture and pruning level
-  sim.py      replications of the growing and pruning procedures; writes the tables
+  sim.py      replications of the growing and pruning procedures; writes Tables 1-2
+  grid.py     exact size of each standard error over validation sizes n and seeds R; writes Table 3
 notebooks/
   run_all_experiments.ipynb   runs everything on Google Colab
 assets/logo.svg
@@ -75,6 +76,7 @@ pip install -r requirements.txt
 cd experiments
 python oracle.py                 # step 1: true risks mu(a); prints the risk table
 python sim.py 1000 0.005 0.01    # step 2: B replications, gamma, delta
+python grid.py 500               # step 3: exact size over n in {50,100,250,1000}, R in {5,10,20}
 ```
 
 `oracle.py` writes `oracle.npz`. `sim.py` prints which null hypotheses are true for the chosen γ and δ, then runs the replications. Choose γ and δ so that the width chain contains both true and false nulls.
@@ -85,7 +87,8 @@ python sim.py 1000 0.005 0.01    # step 2: B replications, gamma, delta
 |---|---|
 | `results.json` | all summaries (FWER, size, selected width/depth, excess risk, pruning loss) |
 | `table_building.tex` | rows of Table 1 (growing), ready to paste into LaTeX |
-| `table_pruning.tex` | rows of Table 2 (pruning) |
+| `table_pruning.tex` | rows of Table 2 (pruning, scenarios A and B) |
+| `grid.json`, `table_grid.tex` | output of `grid.py`: rows of Table 3 (exact size by n and R) |
 
 ### What is compared
 
@@ -97,6 +100,8 @@ python sim.py 1000 0.005 0.01    # step 2: B replications, gamma, delta
 | `single` | paired per-point SE from one seed ($R=1$) |
 | `welch` | unpaired SE (ignores the pairing) |
 
+**Exact size.** Besides the FWER, every width pair is tested at the exact boundary $c=\theta_{\text{true}}$, where a calibrated one-sided test rejects with probability $\alpha$. `grid.py` repeats this over $n$ and $R$: theory predicts that the seed-only error over-rejects when $n$ is small or $R$ is large, and the single-seed error at every $n$.
+
 For pruning, the **cumulative** margin (every pruned network vs. the full one) is compared with a **stepwise** margin (each network vs. the previous one).
 
 ### Simulation design
@@ -104,7 +109,8 @@ For pruning, the **cumulative** margin (every pruned network vs. the full one) i
 - Data: $Y=\sin(2X_1)+X_2X_3+0.5\cos(3X_4)+0.3X_5^2+\varepsilon$, $X\sim N_5(0,I)$, $\varepsilon\sim N(0,0.5^2)$; one fixed training sample of size 600.
 - Networks: random-feature ReLU networks, widths 4–256, depths 1–3; only the output layer is fitted (ridge), so the seed is the only training randomness.
 - Per replication: new validation splits $V_1^a, V_1^b$ (250 each) and $V_2$ (500), $R=10$ seeds per stage, $\alpha=0.05$.
-- Pruning: from width 256, remove 10%, 20%, …, 90% of the units ranked on the training data, then refit.
+- Pruning, scenario A: from width 256 (which overfits), remove 10%, 20%, …, 90% of the units ranked on the training data, then refit.
+- Pruning, scenario B: from width 64, where pruning costs risk, remove 5%, 10%, …, 90% in small steps, so per-step losses stay below δ while the total loss grows.
 
 ## Citation
 
