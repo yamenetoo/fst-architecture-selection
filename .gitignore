@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+experiments/oracle.npz
+experiments/results.json
+experiments/table_*.tex

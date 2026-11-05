@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 200" width="640" height="200" role="img" aria-label="FST-Arch logo">
+  <title>FST-Arch</title>
+  <rect width="640" height="200" rx="24" fill="#0f1b2d"/>
+  <!-- lattice grid of architectures -->
+  <g stroke="#2c4566" stroke-width="2">
+    <line x1="40" y1="150" x2="220" y2="150"/><line x1="40" y1="100" x2="220" y2="100"/><line x1="40" y1="50" x2="220" y2="50"/>
+    <line x1="40" y1="50" x2="40" y2="150"/><line x1="100" y1="50" x2="100" y2="150"/><line x1="160" y1="50" x2="160" y2="150"/><line x1="220" y1="50" x2="220" y2="150"/>
+  </g>
+  <g fill="#2c4566">
+    <circle cx="40" cy="50" r="7"/><circle cx="100" cy="50" r="7"/><circle cx="160" cy="50" r="7"/><circle cx="220" cy="50" r="7"/>
+    <circle cx="40" cy="100" r="7"/><circle cx="100" cy="100" r="7"/><circle cx="160" cy="100" r="7"/><circle cx="220" cy="100" r="7"/>
+    <circle cx="40" cy="150" r="7"/><circle cx="100" cy="150" r="7"/><circle cx="160" cy="150" r="7"/><circle cx="220" cy="150" r="7"/>
+  </g>
+  <!-- growing chain: accepted moves -->
+  <polyline points="40,150 100,150 160,150 160,100" fill="none" stroke="#3ddc97" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#3ddc97"><circle cx="40" cy="150" r="9"/><circle cx="100" cy="150" r="9"/><circle cx="160" cy="150" r="9"/><circle cx="160" cy="100" r="11"/></g>
+  <!-- stopped step -->
+  <line x1="160" y1="100" x2="160" y2="58" stroke="#ff6b6b" stroke-width="4" stroke-dasharray="6 6"/>
+  <g stroke="#ff6b6b" stroke-width="4" stroke-linecap="round"><line x1="150" y1="64" x2="170" y2="44"/><line x1="150" y1="44" x2="170" y2="64"/></g>
+  <!-- wordmark -->
+  <text x="262" y="102" font-family="Helvetica, Arial, sans-serif" font-size="54" font-weight="700" fill="#e8eef7">FST-Arch</text>
+  <text x="264" y="140" font-family="Helvetica, Arial, sans-serif" font-size="19" fill="#9fb3cc">grow &amp; prune with family-wise error control</text>
+</svg>
