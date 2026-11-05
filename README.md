@@ -17,6 +17,14 @@ Simulation code for the article
 
 The repository contains only the code needed to reproduce every number in the article's simulation section (Tables 1 and 2). The article itself is not included.
 
+## 🚀 Quick start: run everything on Google Colab
+
+<a href="https://colab.research.google.com/github/yamenetoo/fst-architecture-selection/blob/main/notebooks/run_all_experiments.ipynb"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab" height="28"></a>
+
+One click opens [`notebooks/run_all_experiments.ipynb`](notebooks/run_all_experiments.ipynb) in Colab. Then choose **Runtime → Run all**. No GPU and no installation are needed.
+
+Direct link: https://colab.research.google.com/github/yamenetoo/fst-architecture-selection/blob/main/notebooks/run_all_experiments.ipynb
+
 ## The idea in one paragraph
 
 Choosing the width and depth of a neural network is a sequence of decisions: *is the next larger network really better?* (growing) or *does the smaller network lose little?* (pruning). We treat every step as a one-sided hypothesis test on the **architecture risk** $\mu(a)$ — the expected loss over the data **and** over the training randomness (seed):
