@@ -6,3 +6,8 @@ experiments/results.json
 experiments/table_*.tex
 experiments/grid.json
 experiments/results.png
+experiments/deep/pool_*/
+experiments/deep/data_cache/
+experiments/deep/results_deep_*.json
+experiments/deep/table_deep_*.tex
+experiments/deep/deep_*.png

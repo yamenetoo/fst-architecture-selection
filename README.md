@@ -25,6 +25,10 @@ One click opens [`notebooks/run_all_experiments.ipynb`](notebooks/run_all_experi
 
 Direct link: https://colab.research.google.com/github/yamenetoo/fst-architecture-selection/blob/main/notebooks/run_all_experiments.ipynb
 
+**Trained MLPs and ResNets (GPU):**
+<a href="https://colab.research.google.com/github/yamenetoo/fst-architecture-selection/blob/main/notebooks/deep_experiments.ipynb"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab" height="28"></a>
+— [`notebooks/deep_experiments.ipynb`](notebooks/deep_experiments.ipynb). Choose a GPU runtime first.
+
 ## The idea in one paragraph
 
 Choosing the width and depth of a neural network is a sequence of decisions: *is the next larger network really better?* (growing) or *does the smaller network lose little?* (pruning). We treat every step as a one-sided hypothesis test on the **architecture risk** $\mu(a)$ — the expected loss over the data **and** over the training randomness (seed):
@@ -58,8 +62,14 @@ experiments/
   oracle.py   Monte Carlo "true" risks mu(a) for every architecture and pruning level
   sim.py      replications of the growing and pruning procedures; writes Tables 1-2
   grid.py     exact size of each standard error over validation sizes n and seeds R; writes Table 3
+  deep/
+    models.py         trained MLP and CIFAR ResNet (ResNet-8/14/20/32, any width) with pruning masks
+    data.py           synthetic regression data and CIFAR-10 with GPU data augmentation
+    train_pool.py     trains every architecture with M shared seeds; stores per-point losses (resumable, multi-GPU)
+    analyze_pool.py   pool-bootstrap study: exact size, growing FWER/power, pruning
 notebooks/
-  run_all_experiments.ipynb   runs everything on Google Colab
+  run_all_experiments.ipynb   random-feature simulation of the article (CPU)
+  deep_experiments.ipynb      trained MLPs and ResNets (GPU)
 assets/logo.svg
 ```
 
@@ -111,6 +121,30 @@ For pruning, the **cumulative** margin (every pruned network vs. the full one) i
 - Per replication: new validation splits $V_1^a, V_1^b$ (250 each) and $V_2$ (500), $R=10$ seeds per stage, $\alpha=0.05$.
 - Pruning, scenario A: from width 256 (which overfits), remove 10%, 20%, …, 90% of the units ranked on the training data, then refit.
 - Pruning, scenario B: from width 64, where pruning costs risk, remove 5%, 10%, …, 90% in small steps, so per-step losses stay below δ while the total loss grows.
+
+## Experiments with trained networks (MLPs and ResNets)
+
+The simulation above uses random-feature networks so that thousands of fits are cheap. The `experiments/deep` folder runs the same procedures on networks trained end to end.
+
+| Task | Architectures | Training | Loss |
+|---|---|---|---|
+| `mlp` | widths 16–1024, depths 1–4 (up to about 3M parameters); regression with $d=10$ inputs | Adam, 5000 training points | squared error |
+| `resnet` | CIFAR ResNet, base width $k\in\{8,16,32,64\}$, $n\in\{1,2,3\}$ blocks per stage (ResNet-8/14/20); `--widths 128 --depths 5` for larger models | SGD + one-cycle, crop/flip augmentation, 20k CIFAR-10 images | 0-1 error (or cross-entropy) |
+
+**Pool bootstrap.** Each architecture is trained once per seed, with the **same** $M$ seeds for all architectures, so comparisons are paired. The per-point losses on a held-out decision pool are stored. Each Monte Carlo replication then resamples $R$ seeds and $n$ points *with replacement* from the pool. The draws are i.i.d. from the pool, so the true risks (pool means) are known exactly and no network is retrained per replication. A separate truth set reports the generalisation error of the selected networks.
+
+**Pruning.** The largest network is pruned layer by layer (MLP: hidden units ranked by activation sd × outgoing-weight norm on the training data; ResNet: inner block channels ranked by BatchNorm |γ|, then BatchNorm statistics are re-estimated on training images).
+
+```bash
+cd experiments/deep
+python train_pool.py --task mlp                                   # bigger MLPs
+python train_pool.py --task resnet                                # ResNet-8/14/20 on CIFAR-10
+python train_pool.py --task resnet --widths 16 32 64 128 --depths 1 2 3 5 --prune-width 128 --prune-depth 5   # larger
+python analyze_pool.py --task mlp    --gamma 0.005 --delta 0.01
+python analyze_pool.py --task resnet --loss err --gamma 0.005 --delta 0.01
+```
+
+Training is resumable (finished files are skipped). On a machine with two GPUs, run two processes with `--device cuda:0 --shard 0/2` and `--device cuda:1 --shard 1/2`.
 
 ## Citation
 

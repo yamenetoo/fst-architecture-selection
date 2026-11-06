@@ -35,6 +35,8 @@ def crossed_se(D):
     num = ms_a + ms_b - ms_e
     if num <= 0:
         num = max(ms_a, ms_b)
+    if num <= 0:          # all differences equal (possible with 0-1 loss)
+        return 0.0, 1.0
     v = num / (n * Rr)
     df = num ** 2 / (ms_a ** 2 / (n - 1) + ms_b ** 2 / (Rr - 1)
                      + ms_e ** 2 / ((Rr - 1) * (n - 1)))
@@ -60,7 +62,9 @@ def reject(method, La, Lb, c, alpha):
         df = a.size + b.size - 2
     else:
         raise ValueError(method)
-    return (est - c) / se < stats.t.ppf(alpha, df)
+    if not np.isfinite(se) or se <= 0:   # degenerate array: decide on the estimate
+        return bool(est < c)
+    return bool((est - c) / se < stats.t.ppf(alpha, df))
 
 
 # ---------------------------------------------------------------- one replication
