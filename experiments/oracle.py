@@ -1,11 +1,19 @@
-"""Monte Carlo 'oracle' risks mu_S(a) for the fixed training sample S.
+"""Monte Carlo 'oracle' risks mu_S(a) for the fixed training sample S (GPU).
 
 mu_S(a) = E_xi E_(x,y) loss, estimated with N_SEEDS hidden-layer seeds and a
-large independent test sample. Saved to oracle.npz.
+large independent test sample. Seeds are processed in batches on the GPU.
+Saved to oracle.npz.
+
+    python oracle.py [--out oracle.npz] [--device cuda] [--seed-batch 25]
 """
-import sys
+import argparse
+import time
+
 import numpy as np
-from rfnet import draw_data, seed_weights, Fitted, pruned
+import torch
+
+from rfgpu import RF
+from rfnet import draw_data
 
 S_SEED = 2026
 N_TRAIN = 600
@@ -21,26 +29,44 @@ PRUNE2_W = 64
 FRACS2 = [round(0.05 * k, 2) for k in range(19)]   # 0.00, 0.05, ..., 0.90
 
 
-def main(out="oracle.npz"):
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default="oracle.npz")
+    ap.add_argument("--device", default=None)
+    ap.add_argument("--seed-batch", type=int, default=25,
+                    help="seeds per GPU batch (lower it if the GPU runs out of memory)")
+    a = ap.parse_args()
+
     xtr, ytr = draw_data(N_TRAIN, np.random.default_rng(S_SEED))
     xte, yte = draw_data(N_TEST, np.random.default_rng(10 ** 6))
+    rf = RF(xtr, ytr, a.device)
+    xt, yt = rf.t(xte), rf.t(yte)
+    print(f"device: {rf.dev}, dtype: {rf.dt}")
+
     risk = np.zeros((N_SEEDS, len(WIDTHS), len(DEPTHS)))
     prune = np.zeros((N_SEEDS, len(FRACS)))
     prune2 = np.zeros((N_SEEDS, len(FRACS2)))
-    for s in range(N_SEEDS):
-        wts = seed_weights(10 ** 7 + s)
-        for i, w in enumerate(WIDTHS):
-            for j, d in enumerate(DEPTHS):
-                risk[s, i, j] = Fitted(xtr, ytr, w, d, wts).loss(xte, yte).mean()
-        full = Fitted(xtr, ytr, 256, 1, wts)
-        for k, fr in enumerate(FRACS):
-            m = full if fr == 0 else pruned(xtr, ytr, full, fr)
-            prune[s, k] = m.loss(xte, yte).mean()
-        full2 = Fitted(xtr, ytr, PRUNE2_W, 1, wts)
-        for k, fr in enumerate(FRACS2):
-            m = full2 if fr == 0 else pruned(xtr, ytr, full2, fr)
-            prune2[s, k] = m.loss(xte, yte).mean()
-    np.savez(out, risk=risk, prune=prune, prune2=prune2, fracs2=FRACS2, widths=WIDTHS, depths=DEPTHS, fracs=FRACS)
+    seeds = [10 ** 7 + s for s in range(N_SEEDS)]
+    t0 = time.time()
+    with torch.no_grad():
+        for c0 in range(0, N_SEEDS, a.seed_batch):
+            sl = slice(c0, min(c0 + a.seed_batch, N_SEEDS))
+            W = rf.weights(seeds[sl])
+            for i, w in enumerate(WIDTHS):
+                for j, d in enumerate(DEPTHS):
+                    risk[sl, i, j] = rf.loss(rf.fit(w, d, W), xt, yt).mean(1).cpu().numpy()
+            full = rf.fit(256, 1, W)
+            for k, fr in enumerate(FRACS):
+                m = full if fr == 0 else rf.pruned(full, fr)
+                prune[sl, k] = rf.loss(m, xt, yt).mean(1).cpu().numpy()
+            full2 = rf.fit(PRUNE2_W, 1, W)
+            for k, fr in enumerate(FRACS2):
+                m = full2 if fr == 0 else rf.pruned(full2, fr)
+                prune2[sl, k] = rf.loss(m, xt, yt).mean(1).cpu().numpy()
+            print(f"seeds {sl.stop}/{N_SEEDS}  {time.time() - t0:.0f}s", flush=True)
+
+    np.savez(a.out, risk=risk, prune=prune, prune2=prune2, fracs2=FRACS2,
+             widths=WIDTHS, depths=DEPTHS, fracs=FRACS)
     mu = risk.mean(0)
     se = risk.std(0, ddof=1) / np.sqrt(N_SEEDS)
     print("mu_S(w, d)  (rows: width, cols: depth 1..3), MC s.e. in brackets")
@@ -56,7 +82,8 @@ def main(out="oracle.npz"):
     for k, fr in enumerate(FRACS2):
         step = p2[k] - p2[k - 1] if k else 0.0
         print(f"{fr:.2f} total={p2[k] - p2[0]:+.4f} step={step:+.4f}")
+    print(f"total time {time.time() - t0:.0f}s")
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:])
+    main()

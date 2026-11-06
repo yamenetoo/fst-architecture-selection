@@ -1,18 +1,26 @@
-"""Simulation study for the letter (Section 5).
+"""Simulation study for the letter (Section 5), on the GPU.
 
 Run AFTER oracle.py:
-    python oracle.py            # writes oracle.npz, prints mu_S(a)
-    python sim.py [B] [gamma] [delta]
+    python oracle.py                       # writes oracle.npz, prints mu_S(a)
+    python sim.py [B] [gamma] [delta] [--device cuda]
 Defaults: B=1000 replications, gamma=0.005, delta=0.01 (MSE units).
 Choose gamma and delta from the oracle printout so that the width chain
 contains both false and true null hypotheses (see the printed truth table).
 Writes results.json and table_building.tex / table_pruning.tex.
+
+The networks of a replication (R seeds per architecture) are fitted in one
+batch on the GPU (rfgpu.py); the tests themselves are cheap and run on the CPU.
 """
+import argparse
 import json
-import sys
+import time
+
 import numpy as np
+import torch
 from scipy import stats
-from rfnet import draw_data, seed_weights, Fitted, pruned
+
+from rfgpu import RF
+from rfnet import draw_data
 from oracle import S_SEED, N_TRAIN, WIDTHS, DEPTHS, FRACS, FRACS2, PRUNE2_W
 
 R = 10            # seeds per comparison
@@ -68,20 +76,25 @@ def reject(method, La, Lb, c, alpha):
 
 
 # ---------------------------------------------------------------- one replication
-def replicate(b, xtr, ytr, mu, mu_pr, mu_pr2, gamma, delta):
+@torch.no_grad()
+def replicate(b, rf, mu, mu_pr, mu_pr2, gamma, delta):
     rng = np.random.default_rng(10 ** 8 + b)
     v1a, v1b, v2 = draw_data(N1, rng), draw_data(N1, rng), draw_data(N2, rng)
     seeds1 = rng.integers(0, 2 ** 31, R)
     seeds2 = rng.integers(0, 2 ** 31, R)
-    w1 = [seed_weights(s) for s in seeds1]
-    w2 = [seed_weights(s) for s in seeds2]
-    cache = {}
+    W = {1: rf.weights(seeds1), 2: rf.weights(seeds2)}
+    dev = {id(v): (rf.t(v[0]), rf.t(v[1])) for v in (v1a, v1b, v2)}
+    models, cache = {}, {}
+
+    def model(w, d, stage):
+        if (w, d, stage) not in models:
+            models[(w, d, stage)] = rf.fit(w, d, W[stage])
+        return models[(w, d, stage)]
 
     def losses(w, d, stage, data):
         key = (w, d, stage, id(data))
         if key not in cache:
-            wts = w1 if stage == 1 else w2
-            cache[key] = np.stack([Fitted(xtr, ytr, w, d, wt).loss(*data) for wt in wts])
+            cache[key] = rf.loss_np(model(w, d, stage), *dev[id(data)])
         return cache[key]
 
     out = {}
@@ -139,12 +152,9 @@ def replicate(b, xtr, ytr, mu, mu_pr, mu_pr2, gamma, delta):
     out["build"]["crossed+safety"] = build("crossed", True)
 
     # pruning from a0 = (256, 1): cumulative (proposed) vs stepwise margins
-    full = [Fitted(xtr, ytr, 256, 1, wt) for wt in w1]
-    pr = {0.0: full}
-    for fr in FRACS[1:]:
-        pr[fr] = [pruned(xtr, ytr, f, fr) for f in full]
-    v1 = (np.vstack([v1a[0], v1b[0]]), np.concatenate([v1a[1], v1b[1]]))
-    L = {fr: np.stack([m.loss(*v1) for m in pr[fr]]) for fr in FRACS}
+    full = model(256, 1, 1)
+    v1 = (rf.t(np.vstack([v1a[0], v1b[0]])), rf.t(np.concatenate([v1a[1], v1b[1]])))
+    L = {fr: rf.loss_np(full if fr == 0 else rf.pruned(full, fr), *v1) for fr in FRACS}
 
     def prune(kind, fracs, Lc, mp):
         k = 0
@@ -162,22 +172,28 @@ def replicate(b, xtr, ytr, mu, mu_pr, mu_pr2, gamma, delta):
     out["prune"] = {k: prune(k, FRACS, L, mu_pr) for k in ["cumulative", "stepwise"]}
 
     # scenario B: prune a width-64 network in 5% steps
-    full2 = [Fitted(xtr, ytr, PRUNE2_W, 1, wt) for wt in w1]
-    L2 = {0.0: np.stack([m.loss(*v1) for m in full2])}
-    for fr in FRACS2[1:]:
-        L2[fr] = np.stack([pruned(xtr, ytr, f, fr).loss(*v1) for f in full2])
+    full2 = model(PRUNE2_W, 1, 1)
+    L2 = {fr: rf.loss_np(full2 if fr == 0 else rf.pruned(full2, fr), *v1) for fr in FRACS2}
     out["prune2"] = {k: prune(k, FRACS2, L2, mu_pr2) for k in ["cumulative", "stepwise"]}
     return out
 
 
 # ---------------------------------------------------------------- main
-def main(B=1000, gamma=0.005, delta=0.01):
-    B, gamma, delta = int(B), float(gamma), float(delta)
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("B", nargs="?", type=int, default=1000)
+    ap.add_argument("gamma", nargs="?", type=float, default=0.005)
+    ap.add_argument("delta", nargs="?", type=float, default=0.01)
+    ap.add_argument("--device", default=None)
+    a = ap.parse_args()
+    B, gamma, delta = a.B, a.gamma, a.delta
     orc = np.load("oracle.npz")
     mu = orc["risk"].mean(0)          # widths x depths
     mu_pr = orc["prune"].mean(0)      # fractions
     mu_pr2 = orc["prune2"].mean(0)    # fractions, scenario B
     xtr, ytr = draw_data(N_TRAIN, np.random.default_rng(S_SEED))
+    rf = RF(xtr, ytr, a.device)
+    print(f"device: {rf.dev}, dtype: {rf.dt}")
 
     print("Truth of width-chain nulls (depth 1): H0 true if mu(w+) - mu(w) >= -gamma")
     for i in range(len(WIDTHS) - 1):
@@ -191,8 +207,14 @@ def main(B=1000, gamma=0.005, delta=0.01):
     for k, fr in enumerate(FRACS2[1:], 1):
         print(f"  {fr:.2f}: total={mu_pr2[k]-mu_pr2[0]:+.4f}  step={mu_pr2[k]-mu_pr2[k-1]:+.4f}")
 
-    res = [replicate(b, xtr, ytr, mu, mu_pr, mu_pr2, gamma, delta) for b in range(B)]
-    print(f"done: {B} replications")
+    t0 = time.time()
+    res = []
+    for b in range(B):
+        res.append(replicate(b, rf, mu, mu_pr, mu_pr2, gamma, delta))
+        if (b + 1) % 50 == 0:
+            el = time.time() - t0
+            print(f"{b + 1}/{B} replications  {el:.0f}s  (about {el / (b + 1) * (B - b - 1):.0f}s left)", flush=True)
+    print(f"done: {B} replications in {time.time() - t0:.0f}s")
 
     def mc(p):  # Monte Carlo standard error of a proportion
         return np.sqrt(p * (1 - p) / B)
@@ -251,4 +273,4 @@ def main(B=1000, gamma=0.005, delta=0.01):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:])
+    main()

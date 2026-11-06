@@ -21,11 +21,13 @@ The repository contains only the code needed to reproduce every number in the ar
 
 <a href="https://colab.research.google.com/github/yamenetoo/fst-architecture-selection/blob/main/notebooks/run_all_experiments.ipynb"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab" height="28"></a>
 
-One click opens [`notebooks/run_all_experiments.ipynb`](notebooks/run_all_experiments.ipynb) in Colab. Then choose **Runtime → Run all**. No GPU and no installation are needed.
+One click opens [`notebooks/run_all_experiments.ipynb`](notebooks/run_all_experiments.ipynb) in Colab. Choose **Runtime → Change runtime type → GPU** (a T4 is enough), then **Runtime → Run all**. Nothing needs to be installed.
+
+The notebook runs **everything on the GPU**: Part 1 is the simulation of the article (random-feature networks, Tables 1–2 and the size grid), Part 2 the trained MLPs and CIFAR-10 ResNets. It also runs on Kaggle (two GPUs supported) and, more slowly, on a CPU.
 
 Direct link: https://colab.research.google.com/github/yamenetoo/fst-architecture-selection/blob/main/notebooks/run_all_experiments.ipynb
 
-**Trained MLPs and ResNets (GPU):**
+**Only the trained MLPs and ResNets (GPU):**
 <a href="https://colab.research.google.com/github/yamenetoo/fst-architecture-selection/blob/main/notebooks/deep_experiments.ipynb"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab" height="28"></a>
 — [`notebooks/deep_experiments.ipynb`](notebooks/deep_experiments.ipynb). Choose a GPU runtime first.
 
@@ -58,7 +60,9 @@ with Satterthwaite degrees of freedom. The usual *seed-only* and *single-seed* s
 
 ```
 experiments/
-  rfnet.py    random-feature ReLU networks (nested across widths), ridge output layer, pruning
+  rfnet.py    random-feature ReLU networks (nested across widths), ridge output layer, pruning -- CPU reference
+  rfgpu.py    the same networks in PyTorch: all seeds of an architecture fitted in one batch on the GPU
+  check_gpu.py  checks that rfgpu.py reproduces rfnet.py (run first)
   oracle.py   Monte Carlo "true" risks mu(a) for every architecture and pruning level
   sim.py      replications of the growing and pruning procedures; writes Tables 1-2
   grid.py     exact size of each standard error over validation sizes n and seeds R; writes Table 3
@@ -84,10 +88,13 @@ git clone https://github.com/yamenetoo/fst-architecture-selection.git
 cd fst-architecture-selection
 pip install -r requirements.txt
 cd experiments
+python check_gpu.py              # step 0: GPU backend reproduces the CPU reference
 python oracle.py                 # step 1: true risks mu(a); prints the risk table
 python sim.py 1000 0.005 0.01    # step 2: B replications, gamma, delta
 python grid.py 500               # step 3: exact size over n in {50,100,250,1000}, R in {5,10,20}
 ```
+
+All scripts use the GPU when one is available (`--device cuda`, `--device cpu`, or the environment variable `FST_DEVICE`). Random numbers are drawn with numpy from fixed seeds, and the GPU code works in double precision, so results do not depend on the device (`check_gpu.py` verifies this). Set `FST_DTYPE=float32` for extra speed at single precision.
 
 `oracle.py` writes `oracle.npz`. `sim.py` prints which null hypotheses are true for the chosen γ and δ, then runs the replications. Choose γ and δ so that the width chain contains both true and false nulls.
 
